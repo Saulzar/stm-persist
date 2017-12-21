@@ -1,0 +1,42 @@
+name:                stm-persist
+version:             0.1.0.0
+synopsis:            Persistent transactions on top of STM.
+description:         Persistent transactions on top of STM.
+license:             MIT
+license-file:        LICENSE
+author:              Oliver Batchelor
+maintainer:          saulzar@gmail.com
+homepage:            https://github.com/saulzar/stm-persist
+bug-reports:         https://github.com/saulzar/stm-persist/issues
+copyright:           (c) 2017 Oliver Batchelor
+category:            Database
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  exposed-modules:  Control.Concurrent.Persist
+  -- other-modules:
+
+  build-depends:       base
+                     , bytestring
+                     , cereal
+                     , safecopy
+                     , stm
+                     , transformers
+                     , pipes, pipes-bytestring, pipes-parse
+                     , atomic-write
+                     , transformers
+                     , directory
+
+  default-language:    Haskell2010
+  default-extensions:  TypeSynonymInstances
+                     , FlexibleContexts
+                     , GeneralizedNewtypeDeriving
+                     , RecordWildCards
+                     , TypeFamilies
+                     , LambdaCase
+
+source-repository head
+  type:     git
+  location: https://github.com/saulzar/stm-persist.git
