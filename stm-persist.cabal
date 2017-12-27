@@ -26,8 +26,9 @@ library
                      , transformers
                      , pipes, pipes-bytestring, pipes-parse
                      , atomic-write
-                     , transformers
+                     , mtl
                      , directory
+                     , QuickCheck
 
   default-language:    Haskell2010
   default-extensions:  TypeSynonymInstances
@@ -36,6 +37,9 @@ library
                      , RecordWildCards
                      , TypeFamilies
                      , LambdaCase
+                     , GADTs
+                     , RankNTypes
+                     , ScopedTypeVariables
 
 source-repository head
   type:     git
