@@ -1,4 +1,17 @@
-module Control.Concurrent.Persist where
+module Control.Concurrent.Log
+  ( updateLog
+  , closeLog
+  , createLog
+  , runWriter
+  , readLog
+  , readLogFile
+  , openLog
+  , freshLog
+
+  , Log
+  , Persistable (..)
+  )
+where
 
 import Control.Applicative
 import Control.Concurrent
@@ -12,6 +25,7 @@ import Control.Monad.Except
 import Control.Monad.Identity
 
 import Control.Monad
+import Data.Traversable
 
 import System.AtomicWrite.Writer.String (atomicWithFile)
 
@@ -20,6 +34,7 @@ import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
 
+import Data.Monoid
 import Data.Maybe
 import Data.SafeCopy
 import Data.Serialize (runGetPartial, Result (..), runPut)
@@ -38,45 +53,78 @@ class (SafeCopy d, SafeCopy (Update d)) => Persistable d where
   type Update d
   update :: Update d -> d -> d
 
-data Action d =  Update (Update d) | Close (STM ()) -- | Flush d
+data Action d =  Update (Update d) | Close (STM ()) | Flush d
 
 
 -- | An opaque type wrapping any kind of user data for use in the 'TX' monad.
-data Database d = Database
+data Log d = Log
   { state  :: TVar d
   , queue  :: TChan (Action d)
+  , thread :: Maybe ThreadId
   }
 
 type Err = String
 
-readLog :: Persistable d => FilePath -> d -> IO (Either Err d)
-readLog filename initial = doesFileExist filename >>= \case
-    False -> return (Right initial)
-    True -> decodeDatabase =<< openBinaryFile filename ReadMode
+readLogFile :: Persistable d => FilePath -> IO (Either Err d)
+readLogFile filename = doesFileExist filename >>= (\case
+    False -> return $ Left ("file does not exist: " <> filename)
+    True -> decodeLog =<< openBinaryFile filename ReadMode)
 
 
-createDatabase :: d -> STM (Database d)
-createDatabase d = Database <$> newTVar d <*> newTChan
+safeWrite :: SafeCopy a => Handle -> a -> IO ()
+safeWrite handle a = do
+  B.hPut handle (runPut (safePut a))
+  hFlush handle
 
 
-runWriter :: Persistable d => Database d -> FilePath -> IO ()
-runWriter d filename = openBinaryFile filename AppendMode >>= go
-  where
-    go handle = do
-      action <- atomically $ readTChan (queue d)
-      case action of
-        Update u     -> B.hPut handle (runPut (safePut u)) >> go handle
-        Close action -> atomically action
+createLog :: d -> STM (Log d)
+createLog d = Log <$> newTVar d <*> newTChan <*> pure Nothing
 
-closeDatabase :: Database d -> STM ()
-closeDatabase d = do
+readLog :: Log d -> STM d
+readLog db = readTVar (state db)
+
+runWriter :: Persistable d => Log d -> FilePath -> IO (Log d)
+runWriter db filename
+    | isJust (thread db) = error "log already has writer thread"
+    | otherwise = do
+  d <- atomically $ readTVar (state db)
+  t <- forkIO (restart d)
+  return db {thread = Just t}
+
+    where
+      restart d = do
+        atomicWithFile filename $ \handle -> safeWrite handle d
+        openBinaryFile filename AppendMode >>= go
+
+      go handle = do
+        action <- atomically $ readTChan (queue db)
+        case action of
+          Update u     -> safeWrite handle u >> go handle
+          Flush  d     -> restart d
+          Close action -> atomically action
+
+openLog :: Persistable d => FilePath -> IO (Either Err (Log d))
+openLog filepath = do
+  e <- readLogFile filepath
+  for e $ \d -> do
+    db <- atomically $ createLog d
+    runWriter db filepath
+
+freshLog :: Persistable d => d -> FilePath -> IO (Log d)
+freshLog initial filepath = do
+  db <- atomically $ createLog initial
+  runWriter db filepath
+
+
+closeLog :: Log d -> STM ()
+closeLog d = do
   v <- newEmptyTMVar
   writeTChan (queue d) (Close $ putTMVar v ())
   takeTMVar v
 
 
-makeUpdate :: Persistable d => Database d -> Update d -> STM ()
-makeUpdate d u = do
+updateLog :: Persistable d => Log d -> Update d -> STM ()
+updateLog d u = do
   modifyTVar (state d) (update u)
   writeTChan (queue d) (Update u)
 
@@ -102,8 +150,8 @@ decode = draw >>= traverse (next . runGetPartial safeGet) where
       return a
 
 
-decodeDatabase :: Persistable d => Handle -> IO (Either Err d)
-decodeDatabase handle = decodeFrom (hGetSome 1024 handle)
+decodeLog :: Persistable d => Handle -> IO (Either Err d)
+decodeLog handle = decodeFrom (hGetSome 1024 handle)
 
 decodeFrom :: (Monad m, Persistable d) => Producer ByteString (ExceptT Err m) r -> m (Either Err d)
 decodeFrom p = runExceptT (evalStateT (decode' >>= go) p)
